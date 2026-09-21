@@ -72,3 +72,27 @@
  .institution-title .logo{padding:6px}
  .site-footer{padding:25px 15px}
 }
+/* Filtros del panel docente */
+.panel input,
+.panel select{
+  padding:10px 12px;
+  border:1px solid #d8d3c8;
+  border-radius:10px;
+  width:100%;
+  background:#fff;
+  color:var(--ink);
+  font-family:'DM Sans',sans-serif;
+  font-size:14px;
+  outline:none;
+}
+
+.panel input::placeholder{
+  color:var(--muted);
+  opacity:1;
+}
+
+.panel input:focus,
+.panel select:focus{
+  border-color:var(--cyan);
+  box-shadow:0 0 0 3px #00c2cb22;
+}

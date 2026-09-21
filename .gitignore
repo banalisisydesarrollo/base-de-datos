@@ -1,0 +1,13 @@
+# Configuración local y secretos
+.env
+local-api/.env
+
+# Dependencias de Node.js
+node_modules/
+local-api/node_modules/
+lambda-api/node_modules/
+
+# Archivos temporales
+*.log
+npm-debug.log*
+lambda-api/lambda-api.zip
