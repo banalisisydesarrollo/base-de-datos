@@ -301,15 +301,18 @@ INICIAR SESIÓN
 */
 
 app.post("/api/login", async (req, res) => {
+
     const client = await pool.connect();
 
     try {
+
         const {
             correo,
             password
         } = req.body;
 
         if (!correo || !password) {
+
             return res.status(400).json({
                 ok: false,
                 mensaje:
@@ -320,21 +323,24 @@ app.post("/api/login", async (req, res) => {
         const correoNormalizado =
             correo.trim().toLowerCase();
 
-        const resultado = await client.query(
-            `
-            SELECT
-                id,
-                nombre_completo,
-                correo,
-                password_hash,
-                activo
-            FROM estudiantes
-            WHERE correo = $1
-            `,
-            [correoNormalizado]
-        );
+        const resultado =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    nombre_completo,
+                    correo,
+                    password_hash,
+                    activo,
+                    grado
+                FROM estudiantes
+                WHERE correo = $1
+                `,
+                [correoNormalizado]
+            );
 
         if (resultado.rows.length === 0) {
+
             return res.status(401).json({
                 ok: false,
                 mensaje:
@@ -342,9 +348,11 @@ app.post("/api/login", async (req, res) => {
             });
         }
 
-        const estudiante = resultado.rows[0];
+        const estudiante =
+            resultado.rows[0];
 
         if (!estudiante.activo) {
+
             return res.status(403).json({
                 ok: false,
                 mensaje:
@@ -359,6 +367,7 @@ app.post("/api/login", async (req, res) => {
             );
 
         if (!passwordCorrecta) {
+
             return res.status(401).json({
                 ok: false,
                 mensaje:
@@ -377,39 +386,54 @@ app.post("/api/login", async (req, res) => {
             [estudiante.id]
         );
 
-        const sesion = await client.query(
-            `
-            INSERT INTO sesiones (
-                estudiante_id
-            )
-            VALUES ($1)
-            RETURNING
-                id,
-                estudiante_id,
-                inicio,
-                ultima_actividad,
-                activa
-            `,
-            [estudiante.id]
-        );
+        const sesion =
+            await client.query(
+                `
+                INSERT INTO sesiones (
+                    estudiante_id
+                )
+                VALUES ($1)
+                RETURNING
+                    id,
+                    estudiante_id,
+                    inicio,
+                    ultima_actividad,
+                    activa
+                `,
+                [estudiante.id]
+            );
 
         await client.query("COMMIT");
 
         res.json({
+
             ok: true,
-            mensaje: "Inicio de sesión correcto",
+
+            mensaje:
+                "Inicio de sesión correcto",
 
             estudiante: {
-                id: estudiante.id,
+
+                id:
+                    estudiante.id,
+
                 nombre_completo:
                     estudiante.nombre_completo,
-                correo: estudiante.correo
+
+                correo:
+                    estudiante.correo,
+
+                grado:
+                    estudiante.grado
+
             },
 
-            sesion: sesion.rows[0]
+            sesion:
+                sesion.rows[0]
         });
 
     } catch (error) {
+
         try {
             await client.query("ROLLBACK");
         } catch (_) {
@@ -421,14 +445,20 @@ app.post("/api/login", async (req, res) => {
         );
 
         res.status(500).json({
+
             ok: false,
+
             mensaje:
                 "No se pudo iniciar sesión",
-            error: error.message
+
+            error:
+                error.message
         });
 
     } finally {
+
         client.release();
+
     }
 });
 

@@ -1438,131 +1438,259 @@ function form(title,body){
   </header><main class="wrap"><div class="form"><span class="eyebrow"></span><h1>${title}</h1><div class="formgrid">${body}</div><p><button class="btn secondary" onclick="home()">← Volver al inicio</button></p></div></main>${siteFooter()}`;
 }
 async function doLogin(){
-  const email=$('#email').value.trim().toLowerCase();
-  const pw=$('#password').value;
+
+  const email =
+    $('#email').value.trim().toLowerCase();
+
+  const pw =
+    $('#password').value;
 
   if(!email || !pw){
-    return alert('Ingresa el correo y la contraseña.');
+    return alert(
+      'Ingresa el correo y la contraseña.'
+    );
   }
+
 
   // =====================================================
   // ACCESO DEL DOCENTE
   // =====================================================
 
-  if(email==='docente@sql11.local' && pw==='Docente123!'){
-    if(!state.users.some(x=>x.email===email)){
+  if(
+    email === 'docente@sql11.local' &&
+    pw === 'Docente123!'
+  ){
+
+    if(
+      !state.users.some(
+        x => x.email === email
+      )
+    ){
+
       state.users.push({
+
         email,
-        first:'Docente',
-        last:'Demo',
-        role:'teacher'
+
+        first:
+          'Docente',
+
+        last:
+          'Demo',
+
+        role:
+          'teacher'
+
       });
+
     }
 
-    state.current=email;
+    state.current =
+      email;
+
     save();
+
     return render();
   }
+
 
   // =====================================================
   // ACCESO DEL ESTUDIANTE MEDIANTE POSTGRESQL
   // =====================================================
 
   try{
-    const respuesta=await apiFetch('/login',{
-      method:'POST',
-      body:JSON.stringify({
-        correo:email,
-        password:pw
-      })
-    });
 
-    const estudiante=respuesta.estudiante;
-    const sesion=respuesta.sesion;
+    const respuesta =
+      await apiFetch('/login',{
+        method:'POST',
+
+        body:JSON.stringify({
+
+          correo:
+            email,
+
+          password:
+            pw
+
+        })
+
+      });
+
+
+    const estudiante =
+      respuesta.estudiante;
+
+    const sesion =
+      respuesta.sesion;
+
 
     // =====================================================
-    // RECUPERAR LOS DATOS ACADÉMICOS LOCALES
+    // RECUPERAR DATOS LOCALES COMPLEMENTARIOS
     // =====================================================
 
-    const usuarioExistente=
-      state.users.find(x=>x.email===email);
+    const usuarioExistente =
+      state.users.find(
+        x => x.email === email
+      );
+
+
+    const partesNombre =
+      estudiante.nombre_completo
+        .trim()
+        .split(' ');
+
 
     const u={
       id:estudiante.id,
       email:estudiante.correo,
+
       first:usuarioExistente?.first ||
             estudiante.nombre_completo.split(' ')[0],
+
       last:usuarioExistente?.last ||
-          estudiante.nombre_completo.split(' ').slice(1).join(' '),
+          estudiante.nombre_completo
+            .split(' ')
+            .slice(1)
+            .join(' '),
+
       code:usuarioExistente?.code || '',
+
       inst:usuarioExistente?.inst || '',
+
       group:usuarioExistente?.group || '',
+
+      grado:estudiante.grado || '',
+
       role:'student',
+
       sessionId:sesion.id
     };
+
 
     // =====================================================
     // ACTUALIZAR USUARIO ACTUAL
     // =====================================================
 
-    const indice=state.users.findIndex(
-      x=>x.email===email
-    );
+    const indice =
+      state.users.findIndex(
+        x => x.email === email
+      );
 
-    if(indice>=0){
-      state.users[indice]=u;
+
+    if(indice >= 0){
+
+      state.users[indice] =
+        u;
+
     }else{
-      state.users.push(u);
+
+      state.users.push(
+        u
+      );
+
     }
 
-    state.current=email;
+
+    state.current =
+      email;
+
 
     // =====================================================
     // RECUPERAR PROGRESO DESDE POSTGRESQL
     // =====================================================
 
-    const progresoRespuesta=
-      await apiFetch(`/progreso/${estudiante.id}`);
+    const progresoRespuesta =
+      await apiFetch(
+        `/progreso/${estudiante.id}`
+      );
 
-    state.progress[email]={};
 
-    progresoRespuesta.progreso.forEach(item=>{
-      state.progress[email][item.leccion]={
-        done:item.completada,
-        porcentaje:Number(item.porcentaje),
-        fechaActualizacion:item.fecha_actualizacion
-      };
-    });
+    state.progress[email] =
+      {};
+
+
+    progresoRespuesta.progreso
+      .forEach(item => {
+
+        state.progress[email][item.leccion] = {
+
+          done:
+            item.completada,
+
+          porcentaje:
+            Number(
+              item.porcentaje
+            ),
+
+          fechaActualizacion:
+            item.fecha_actualizacion
+
+        };
+
+      });
+
 
     // =====================================================
-    // RECUPERAR INTENTOS DEL EXAMEN DESDE POSTGRESQL
+    // RECUPERAR INTENTOS DEL EXAMEN
     // =====================================================
 
-    const evaluacionesRespuesta=
-      await apiFetch(`/evaluaciones/${estudiante.id}`);
+    const evaluacionesRespuesta =
+      await apiFetch(
+        `/evaluaciones/${estudiante.id}`
+      );
 
-    state.attempts[email]=
-      evaluacionesRespuesta.evaluaciones.map(item=>({
-        correct:Number(item.aciertos),
-        score:Number(item.nota),
-        date:item.fecha_hora,
-        intento:Number(item.intento),
-        answers:[]
-      }));
 
-    // Guardar solamente la información recuperada
-    // y mostrar el recorrido actualizado.
+    state.attempts[email] =
+      evaluacionesRespuesta
+        .evaluaciones
+        .map(item => ({
+
+          correct:
+            Number(
+              item.aciertos
+            ),
+
+          score:
+            Number(
+              item.nota
+            ),
+
+          date:
+            item.fecha_hora,
+
+          intento:
+            Number(
+              item.intento
+            ),
+
+          answers:
+            []
+
+        }));
+
+
+    // =====================================================
+    // GUARDAR Y MOSTRAR RECORRIDO
+    // =====================================================
+
     save();
+
     render();
 
+
   }catch(error){
-    console.error('Error iniciando sesión:',error);
+
+    console.error(
+      'Error iniciando sesión:',
+      error
+    );
 
     alert(
       error.message ||
       'No se pudo iniciar sesión.'
     );
+
   }
+
 }
 
 async function doRegister(){
@@ -1833,7 +1961,7 @@ function dashboard(){
 
         <p>
           ${esc(u.inst || '')}
-          · Grado ${esc(u.grade || '—')}
+          Grado ${esc(u.grado || '—')}
         </p>
 
       </div>
