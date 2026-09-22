@@ -3478,6 +3478,39 @@ async function teacher(){
   }
 }
 
+function limpiarFiltrosDocente(){
+
+  const nombre =
+    $('#teacher-name');
+
+  const apellido =
+    $('#teacher-lastname');
+
+  const grado =
+    $('#teacher-grade');
+
+  const nota =
+    $('#teacher-score');
+
+  if(nombre){
+    nombre.value = '';
+  }
+
+  if(apellido){
+    apellido.value = '';
+  }
+
+  if(grado){
+    grado.value = '';
+  }
+
+  if(nota){
+    nota.value = '';
+  }
+
+  renderTeacherTable();
+}
+
 function renderTeacherTable(){
 
   const estudiantes =
@@ -3866,7 +3899,7 @@ function renderTeacherTable(){
 
         <button
           class="btn secondary"
-          onclick="teacher()">
+          onclick="limpiarFiltrosDocente()">
 
           Limpiar filtros
 
