@@ -1533,36 +1533,53 @@ async function doLogin(){
       );
 
 
-    const partesNombre =
-      estudiante.nombre_completo
-        .trim()
-        .split(' ');
+    const gradoEstudiante =
+      estudiante.grado ||
+      usuarioExistente?.grado ||
+      usuarioExistente?.grade ||
+      '';
 
 
     const u={
-      id:estudiante.id,
-      email:estudiante.correo,
 
-      first:usuarioExistente?.first ||
-            estudiante.nombre_completo.split(' ')[0],
+      id:
+        estudiante.id,
 
-      last:usuarioExistente?.last ||
-          estudiante.nombre_completo
-            .split(' ')
-            .slice(1)
-            .join(' '),
+      email:
+        estudiante.correo,
 
-      code:usuarioExistente?.code || '',
+      first:
+        usuarioExistente?.first ||
+        estudiante.nombre_completo
+          .split(' ')[0],
 
-      inst:usuarioExistente?.inst || '',
+      last:
+        usuarioExistente?.last ||
+        estudiante.nombre_completo
+          .split(' ')
+          .slice(1)
+          .join(' '),
 
-      group:usuarioExistente?.group || '',
+      code:
+        usuarioExistente?.code ||
+        '',
 
-      grado:estudiante.grado || '',
+      inst:
+        usuarioExistente?.inst ||
+        '',
 
-      role:'student',
+      group:
+        usuarioExistente?.group ||
+        '',
 
-      sessionId:sesion.id
+      grado:
+        gradoEstudiante,
+
+      role:
+        'student',
+
+      sessionId:
+        sesion.id
     };
 
 
