@@ -2,28 +2,54 @@
 // CONEXIÓN CON LA API LOCAL DE SQL 11
 // =========================================================
 
-const API_BASE_URL = 'http://localhost:3000/api';
-
+const API_BASE_URL = 'https://historic-turn-saints-textbook.trycloudflare.com/api';
 async function apiFetch(endpoint, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {})
-    },
-    ...options
-  });
+
+  const usuarioActual =
+    typeof state !== 'undefined' && state.current
+      ? state.users.find(
+          x => x.email === state.current
+        )
+      : null;
+
+  const token =
+    usuarioActual?.token || '';
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {})
+  };
+
+  if (
+    token &&
+    !headers.Authorization
+  ) {
+    headers.Authorization =
+      `Bearer ${token}`;
+  }
+
+  const response =
+    await fetch(
+      `${API_BASE_URL}${endpoint}`,
+      {
+        ...options,
+        headers
+      }
+    );
 
   let data = null;
 
   try {
-    data = await response.json();
+    data =
+      await response.json();
   } catch (_) {
     data = null;
   }
 
   if (!response.ok) {
     throw new Error(
-      data?.mensaje || 'Error de comunicación con la API'
+      data?.mensaje ||
+      'Error de comunicación con la API'
     );
   }
 
@@ -1453,44 +1479,99 @@ async function doLogin(){
 
 
   // =====================================================
-  // ACCESO DEL DOCENTE
-  // =====================================================
+// ACCESO DEL DOCENTE
+// =====================================================
 
-  if(
-    email === 'docente@sql11.local' &&
-    pw === 'Docente123!'
-  ){
+if (
+  email === 'docente@sql11.local'
+) {
 
-    if(
-      !state.users.some(
-        x => x.email === email
-      )
-    ){
+  const respuestaDocente =
+    await fetch(
+      `${API_BASE_URL}/login-docente`,
+      {
+        method: 'POST',
 
-      state.users.push({
+        headers: {
+          'Content-Type':
+            'application/json'
+        },
 
-        email,
+        body: JSON.stringify({
+          correo: email,
+          password: pw
+        })
+      }
+    );
 
-        first:
-          'Docente',
+  let datosDocente = null;
 
-        last:
-          'Demo',
+  try {
 
-        role:
-          'teacher'
+    datosDocente =
+      await respuestaDocente.json();
 
-      });
+  } catch (_) {
 
-    }
+    datosDocente = null;
 
-    state.current =
-      email;
-
-    save();
-
-    return render();
   }
+
+  if (!respuestaDocente.ok) {
+
+    throw new Error(
+      datosDocente?.mensaje ||
+      'No se pudo iniciar sesión como docente'
+    );
+
+  }
+
+  let usuarioDocente =
+    state.users.find(
+      x => x.email === email
+    );
+
+  if (!usuarioDocente) {
+
+    usuarioDocente = {
+
+      email,
+
+      first:
+        'Docente',
+
+      last:
+        'Demo',
+
+      role:
+        'teacher',
+
+      token:
+        datosDocente.token
+
+    };
+
+    state.users.push(
+      usuarioDocente
+    );
+
+  } else {
+
+    usuarioDocente.role =
+      'teacher';
+
+    usuarioDocente.token =
+      datosDocente.token;
+
+  }
+
+  state.current =
+    email;
+
+  save();
+
+  return render();
+}
 
 
   // =====================================================
@@ -1579,7 +1660,12 @@ async function doLogin(){
         'student',
 
       sessionId:
-        sesion.id
+        sesion.id,
+
+      token:
+        respuesta.token
+      
+
     };
 
 
@@ -2949,7 +3035,8 @@ function startExam(){
         original[1].map(
           (texto,i)=>({
             texto,
-            correcta:i===original[2]
+            correcta:i===original[2],
+            indiceOriginal:i
           })
         );
 
@@ -3118,13 +3205,26 @@ async function finishExam(){
         method:'POST',
 
         body:JSON.stringify({
-          estudiante_id:u.id,
           tipo:'EXAMEN_FINAL',
-          aciertos:correct,
-          total_preguntas:20,
-          porcentaje,
-          nota:score
+
+          respuestas:
+            e.questions.map(
+              (pregunta,i) => ({
+                pregunta_id:
+                  pregunta.id,
+
+                respuesta:
+                  pregunta.opciones[
+                    e.answers[i]
+                  ]
+                    ? pregunta.opciones[
+                        e.answers[i]
+                      ].indiceOriginal
+                    : null
+              })
+            )
         })
+
       });
 
     const evaluacion =
@@ -3176,7 +3276,6 @@ async function finishExam(){
       method:'POST',
 
       body:JSON.stringify({
-        estudiante_id:u.id,
         accion:'EXAMEN_COMPLETADO',
 
         detalle:
@@ -3184,6 +3283,7 @@ async function finishExam(){
           `${evaluacion.aciertos}/20 correctas · ` +
           `Nota ${evaluacion.nota}/5.0`
       })
+
     });
 
     delete state.exam;

@@ -10,6 +10,32 @@ const PORT = process.env.PORT || 3000;
 
 const scryptAsync = promisify(crypto.scrypt);
 
+/*
+=========================================================
+CLAVE DE RESPUESTAS DEL EXAMEN FINAL
+=========================================================
+Índice de la respuesta correcta para cada pregunta
+del banco de 40 preguntas de app.js.
+*/
+
+const CLAVE_EXAMEN_FINAL = [
+    0, 0, 1, 0, 0,
+    0, 0, 1, 0, 0,
+    0, 1, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0
+];
+
+if (CLAVE_EXAMEN_FINAL.length !== 40) {
+    throw new Error(
+        "La clave del examen debe tener exactamente 40 respuestas."
+    );
+}
+
+
 app.use(cors());
 app.use(express.json());
 
@@ -97,6 +123,270 @@ async function verificarPassword(password, passwordHash) {
 
 /*
 =========================================================
+AUTENTICACIÓN DE SESIONES
+=========================================================
+*/
+
+function crearTokenSesion(sesionId, estudianteId, rol = "student") {
+
+    const payload = {
+        sid: Number(sesionId),
+        uid: Number(estudianteId),
+        rol,
+        iat: Math.floor(Date.now() / 1000)
+    };
+
+    const contenido =
+        Buffer.from(
+            JSON.stringify(payload)
+        ).toString("base64url");
+
+    const firma =
+        crypto
+            .createHmac(
+                "sha256",
+                process.env.AUTH_SECRET
+            )
+            .update(contenido)
+            .digest("base64url");
+
+    return `${contenido}.${firma}`;
+}
+
+function verificarTokenSesion(token) {
+
+    try {
+
+        if (
+            typeof token !== "string" ||
+            !token.includes(".")
+        ) {
+            return null;
+        }
+
+        const partes =
+            token.split(".");
+
+        if (partes.length !== 2) {
+            return null;
+        }
+
+        const [
+            contenido,
+            firmaRecibida
+        ] = partes;
+
+        const firmaEsperada =
+            crypto
+                .createHmac(
+                    "sha256",
+                    process.env.AUTH_SECRET
+                )
+                .update(contenido)
+                .digest("base64url");
+
+        const bufferRecibido =
+            Buffer.from(
+                firmaRecibida
+            );
+
+        const bufferEsperado =
+            Buffer.from(
+                firmaEsperada
+            );
+
+        if (
+            bufferRecibido.length !==
+            bufferEsperado.length
+        ) {
+            return null;
+        }
+
+        if (
+            !crypto.timingSafeEqual(
+                bufferRecibido,
+                bufferEsperado
+            )
+        ) {
+            return null;
+        }
+
+        const payload =
+            JSON.parse(
+                Buffer.from(
+                    contenido,
+                    "base64url"
+                ).toString("utf8")
+            );
+
+        if (!payload.rol) {
+            return null;
+        }
+
+        if (payload.rol === "student") {
+
+            if (!payload.sid || !payload.uid) {
+                return null;
+            }
+
+        } else if (payload.rol === "teacher") {
+
+            if (
+                payload.sid !== 0 ||
+                payload.uid !== 0
+            ) {
+                return null;
+            }
+
+        } else {
+
+            return null;
+        }
+
+        return payload;
+
+    } catch (error) {
+
+        console.error(
+            "Error verificando token de sesión:",
+            error
+        );
+
+        return null;
+    }
+}
+
+/*
+=========================================================
+MIDDLEWARE DE AUTENTICACIÓN
+=========================================================
+*/
+
+async function autenticarSesion(req, res, next) {
+
+    try {
+
+        const encabezado =
+            req.headers.authorization || "";
+
+        if (
+            !encabezado.startsWith("Bearer ")
+        ) {
+            return res.status(401).json({
+                ok: false,
+                mensaje: "Autenticación requerida"
+            });
+        }
+
+        const token =
+            encabezado.substring(7).trim();
+
+        const payload =
+            verificarTokenSesion(token);
+
+        if (!payload) {
+            return res.status(401).json({
+                ok: false,
+                mensaje: "Token de autenticación inválido"
+            });
+        }
+
+        if (
+            payload.rol !== "student" &&
+            payload.rol !== "teacher"
+        ) {
+            return res.status(403).json({
+                ok: false,
+                mensaje: "Rol de autenticación inválido"
+            });
+        }
+
+        if (payload.rol === "teacher") {
+
+            req.user = {
+                id: null,
+                nombre_completo: "Docente",
+                correo:
+                    process.env.DOCENTE_EMAIL,
+                grado: null,
+                rol: "teacher",
+                sessionId: null
+            };
+
+            return next();
+        }
+
+        const resultado =
+            await pool.query(
+                `
+                SELECT
+                    s.id,
+                    s.estudiante_id,
+                    s.inicio,
+                    s.ultima_actividad,
+                    s.fin,
+                    s.activa,
+                    e.nombre_completo,
+                    e.correo,
+                    e.grado,
+                    e.activo
+                FROM sesiones s
+                INNER JOIN estudiantes e
+                    ON e.id = s.estudiante_id
+                WHERE s.id = $1
+                  AND s.estudiante_id = $2
+                  AND s.activa = TRUE
+                  AND e.activo = TRUE
+                `,
+                [
+                    payload.sid,
+                    payload.uid
+                ]
+            );
+
+        if (resultado.rows.length === 0) {
+            return res.status(401).json({
+                ok: false,
+                mensaje: "Sesión no válida o cerrada"
+            });
+        }
+
+        const sesion =
+            resultado.rows[0];
+
+        req.user = {
+            id: sesion.estudiante_id,
+            nombre_completo:
+                sesion.nombre_completo,
+            correo:
+                sesion.correo,
+            grado:
+                sesion.grado,
+            rol:
+                payload.rol,
+            sessionId:
+                sesion.id
+        };
+
+        next();
+
+    } catch (error) {
+
+        console.error(
+            "Error autenticando sesión:",
+            error
+        );
+
+        return res.status(500).json({
+            ok: false,
+            mensaje:
+                "No se pudo validar la autenticación"
+        });
+    }
+}
+
+/*
+=========================================================
 HEALTH CHECK
 =========================================================
 */
@@ -137,38 +427,47 @@ CONSULTAR ESTUDIANTES
 =========================================================
 */
 
-app.get("/api/estudiantes", async (req, res) => {
-    try {
-        const result = await pool.query(`
-            SELECT
-                id,
-                nombre_completo,
-                correo,
-                fecha_registro,
-                ultimo_acceso,
-                activo
-            FROM estudiantes
-            ORDER BY id
-        `);
+app.get(
+    "/api/estudiantes",
+    autenticarSesion,
+    async (req, res) => {
 
-        res.json({
-            ok: true,
-            estudiantes: result.rows
-        });
+        try {
 
-    } catch (error) {
-        console.error(
-            "Error consultando estudiantes:",
-            error
-        );
+            const result =
+                await pool.query(`
+                    SELECT
+                        id,
+                        nombre_completo,
+                        correo,
+                        fecha_registro,
+                        ultimo_acceso,
+                        activo
+                    FROM estudiantes
+                    ORDER BY id
+                `);
 
-        res.status(500).json({
-            ok: false,
-            mensaje: "No se pudieron consultar los estudiantes",
-            error: error.message
-        });
+            res.json({
+                ok: true,
+                estudiantes:
+                    result.rows
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Error consultando estudiantes:",
+                error
+            );
+
+            res.status(500).json({
+                ok: false,
+                mensaje:
+                    "No se pudieron consultar los estudiantes"
+            });
+        }
     }
-});
+);
 
 /*
 =========================================================
@@ -366,6 +665,7 @@ app.post("/api/login", async (req, res) => {
                 estudiante.password_hash
             );
 
+
         if (!passwordCorrecta) {
 
             return res.status(401).json({
@@ -376,6 +676,7 @@ app.post("/api/login", async (req, res) => {
         }
 
         await client.query("BEGIN");
+
 
         await client.query(
             `
@@ -403,7 +704,16 @@ app.post("/api/login", async (req, res) => {
                 [estudiante.id]
             );
 
+
         await client.query("COMMIT");
+
+
+        const token =
+            crearTokenSesion(
+                sesion.rows[0].id,
+                estudiante.id,
+                "student"
+            );
 
         res.json({
 
@@ -411,6 +721,8 @@ app.post("/api/login", async (req, res) => {
 
             mensaje:
                 "Inicio de sesión correcto",
+
+            token,
 
             estudiante: {
 
@@ -462,67 +774,176 @@ app.post("/api/login", async (req, res) => {
     }
 });
 
+
+app.post(
+    "/api/login-docente",
+    async (req, res) => {
+
+        try {
+
+            const {
+                correo,
+                password
+            } = req.body;
+
+            if (!correo || !password) {
+
+                return res.status(400).json({
+                    ok: false,
+                    mensaje:
+                        "Correo y contraseña son obligatorios"
+                });
+            }
+
+            const correoNormalizado =
+                String(correo)
+                    .trim()
+                    .toLowerCase();
+
+            const correoDocente =
+                String(
+                    process.env.DOCENTE_EMAIL || ""
+                )
+                    .trim()
+                    .toLowerCase();
+
+            const passwordDocente =
+                String(
+                    process.env.DOCENTE_PASSWORD || ""
+                );
+
+            if (
+                correoNormalizado !==
+                    correoDocente ||
+                password !==
+                    passwordDocente
+            ) {
+
+                return res.status(401).json({
+                    ok: false,
+                    mensaje:
+                        "Correo o contraseña incorrectos"
+                });
+            }
+
+            const token =
+                crearTokenSesion(
+                    0,
+                    0,
+                    "teacher"
+                );
+
+            res.json({
+
+                ok: true,
+
+                mensaje:
+                    "Inicio de sesión docente correcto",
+
+                token,
+
+                docente: {
+                    correo:
+                        correoDocente,
+
+                    nombre_completo:
+                        "Docente"
+                }
+
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Error iniciando sesión docente:",
+                error
+            );
+
+            res.status(500).json({
+                ok: false,
+                mensaje:
+                    "No se pudo iniciar sesión"
+            });
+        }
+    }
+);
+
+
+
 /*
 =========================================================
 ACTUALIZAR ACTIVIDAD DE UNA SESIÓN
 =========================================================
 */
 
-app.put("/api/sesiones/:id/actividad", async (req, res) => {
-    try {
-        const sesionId =
-            Number(req.params.id);
+app.put(
+    "/api/sesiones/:id/actividad",
+    autenticarSesion,
+    async (req, res) => {
 
-        if (!Number.isInteger(sesionId)) {
-            return res.status(400).json({
-                ok: false,
-                mensaje: "ID de sesión inválido"
+        try {
+
+            const sesionId =
+                Number(req.params.id);
+
+            if (!Number.isInteger(sesionId)) {
+                return res.status(400).json({
+                    ok: false,
+                    mensaje:
+                        "ID de sesión inválido"
+                });
+            }
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sesiones
+                    SET ultima_actividad = NOW()
+                    WHERE id = $1
+                      AND estudiante_id = $2
+                      AND activa = TRUE
+                    RETURNING
+                        id,
+                        estudiante_id,
+                        inicio,
+                        ultima_actividad,
+                        activa
+                    `,
+                    [
+                        sesionId,
+                        req.user.id
+                    ]
+                );
+
+            if (result.rows.length === 0) {
+                return res.status(404).json({
+                    ok: false,
+                    mensaje:
+                        "Sesión no encontrada o no pertenece al usuario autenticado"
+                });
+            }
+
+            res.json({
+                ok: true,
+                sesion: result.rows[0]
             });
-        }
 
-        const result = await pool.query(
-            `
-            UPDATE sesiones
-            SET ultima_actividad = NOW()
-            WHERE id = $1
-              AND activa = TRUE
-            RETURNING
-                id,
-                estudiante_id,
-                inicio,
-                ultima_actividad,
-                activa
-            `,
-            [sesionId]
-        );
+        } catch (error) {
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({
+            console.error(
+                "Error actualizando sesión:",
+                error
+            );
+
+            res.status(500).json({
                 ok: false,
                 mensaje:
-                    "Sesión no encontrada o inactiva"
+                    "No se pudo actualizar la sesión"
             });
         }
-
-        res.json({
-            ok: true,
-            sesion: result.rows[0]
-        });
-
-    } catch (error) {
-        console.error(
-            "Error actualizando sesión:",
-            error
-        );
-
-        res.status(500).json({
-            ok: false,
-            mensaje:
-                "No se pudo actualizar la sesión",
-            error: error.message
-        });
     }
-});
+);
+
 
 /*
 =========================================================
@@ -530,57 +951,81 @@ CERRAR SESIÓN
 =========================================================
 */
 
-app.put("/api/sesiones/:id/cerrar", async (req, res) => {
-    try {
-        const sesionId =
-            Number(req.params.id);
+app.put(
+    "/api/sesiones/:id/cerrar",
+    autenticarSesion,
+    async (req, res) => {
 
-        const result = await pool.query(
-            `
-            UPDATE sesiones
-            SET
-                activa = FALSE,
-                fin = NOW(),
-                ultima_actividad = NOW()
-            WHERE id = $1
-            RETURNING
-                id,
-                estudiante_id,
-                inicio,
-                ultima_actividad,
-                fin,
-                activa
-            `,
-            [sesionId]
-        );
+        try {
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({
+            const sesionId =
+                Number(req.params.id);
+
+            if (!Number.isInteger(sesionId)) {
+                return res.status(400).json({
+                    ok: false,
+                    mensaje:
+                        "ID de sesión inválido"
+                });
+            }
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sesiones
+                    SET
+                        activa = FALSE,
+                        fin = NOW(),
+                        ultima_actividad = NOW()
+                    WHERE id = $1
+                      AND estudiante_id = $2
+                      AND activa = TRUE
+                    RETURNING
+                        id,
+                        estudiante_id,
+                        inicio,
+                        ultima_actividad,
+                        fin,
+                        activa
+                    `,
+                    [
+                        sesionId,
+                        req.user.id
+                    ]
+                );
+
+            if (result.rows.length === 0) {
+                return res.status(404).json({
+                    ok: false,
+                    mensaje:
+                        "Sesión no encontrada o no pertenece al usuario autenticado"
+                });
+            }
+
+            res.json({
+                ok: true,
+                mensaje:
+                    "Sesión cerrada correctamente",
+                sesion:
+                    result.rows[0]
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Error cerrando sesión:",
+                error
+            );
+
+            res.status(500).json({
                 ok: false,
-                mensaje: "Sesión no encontrada"
+                mensaje:
+                    "No se pudo cerrar la sesión"
             });
         }
-
-        res.json({
-            ok: true,
-            mensaje: "Sesión cerrada correctamente",
-            sesion: result.rows[0]
-        });
-
-    } catch (error) {
-        console.error(
-            "Error cerrando sesión:",
-            error
-        );
-
-        res.status(500).json({
-            ok: false,
-            mensaje:
-                "No se pudo cerrar la sesión",
-            error: error.message
-        });
     }
-});
+);
+
 
 /*
 =========================================================
@@ -588,215 +1033,38 @@ GUARDAR PROGRESO DE UNA LECCIÓN
 =========================================================
 */
 
-app.post("/api/progreso", async (req, res) => {
-    try {
-        const {
-            estudiante_id,
-            leccion,
-            completada,
-            porcentaje
-        } = req.body;
+app.post(
+    "/api/progreso",
+    autenticarSesion,
+    async (req, res) => {
 
-        if (
-            estudiante_id === undefined ||
-            leccion === undefined ||
-            porcentaje === undefined
-        ) {
-            return res.status(400).json({
-                ok: false,
-                mensaje:
-                    "estudiante_id, leccion y porcentaje son obligatorios"
-            });
-        }
+        try {
 
-        const estudianteId = Number(estudiante_id);
-        const numeroLeccion = Number(leccion);
-        const porcentajeNumero = Number(porcentaje);
-        const completadaBoolean =
-            Boolean(completada);
-
-        if (!Number.isInteger(estudianteId)) {
-            return res.status(400).json({
-                ok: false,
-                mensaje: "estudiante_id inválido"
-            });
-        }
-
-        if (
-            !Number.isInteger(numeroLeccion) ||
-            numeroLeccion < 1 ||
-            numeroLeccion > 20
-        ) {
-            return res.status(400).json({
-                ok: false,
-                mensaje:
-                    "La lección debe estar entre 1 y 20"
-            });
-        }
-
-        if (
-            Number.isNaN(porcentajeNumero) ||
-            porcentajeNumero < 0 ||
-            porcentajeNumero > 100
-        ) {
-            return res.status(400).json({
-                ok: false,
-                mensaje:
-                    "El porcentaje debe estar entre 0 y 100"
-            });
-        }
-
-        const result = await pool.query(
-            `
-            INSERT INTO progreso (
-                estudiante_id,
+            const {
                 leccion,
                 completada,
-                porcentaje,
-                fecha_actualizacion
-            )
-            VALUES ($1, $2, $3, $4, NOW())
+                porcentaje
+            } = req.body;
 
-            ON CONFLICT (
-                estudiante_id,
-                leccion
-            )
-            DO UPDATE SET
-                completada = EXCLUDED.completada,
-                porcentaje = EXCLUDED.porcentaje,
-                fecha_actualizacion = NOW()
+            if (
+                leccion === undefined ||
+                porcentaje === undefined
+            ) {
+                return res.status(400).json({
+                    ok: false,
+                    mensaje:
+                        "leccion y porcentaje son obligatorios"
+                });
+            }
 
-            RETURNING
-                id,
-                estudiante_id,
-                leccion,
-                completada,
-                porcentaje,
-                fecha_actualizacion
-            `,
-            [
-                estudianteId,
-                numeroLeccion,
-                completadaBoolean,
-                porcentajeNumero
-            ]
-        );
+            const numeroLeccion =
+                Number(leccion);
 
-        res.json({
-            ok: true,
-            mensaje: "Progreso guardado correctamente",
-            progreso: result.rows[0]
-        });
+            const porcentajeNumero =
+                Number(porcentaje);
 
-    } catch (error) {
-        console.error(
-            "Error guardando progreso:",
-            error
-        );
-
-        res.status(500).json({
-            ok: false,
-            mensaje:
-                "No se pudo guardar el progreso",
-            error: error.message
-        });
-    }
-});
-
-/*
-=========================================================
-CONSULTAR PROGRESO DE UN ESTUDIANTE
-=========================================================
-*/
-
-app.get("/api/progreso/:estudiante_id", async (req, res) => {
-    try {
-        const estudianteId =
-            Number(req.params.estudiante_id);
-
-        if (!Number.isInteger(estudianteId)) {
-            return res.status(400).json({
-                ok: false,
-                mensaje: "estudiante_id inválido"
-            });
-        }
-
-        const result = await pool.query(
-            `
-            SELECT
-                id,
-                estudiante_id,
-                leccion,
-                completada,
-                porcentaje,
-                fecha_actualizacion
-            FROM progreso
-            WHERE estudiante_id = $1
-            ORDER BY leccion
-            `,
-            [estudianteId]
-        );
-
-        res.json({
-            ok: true,
-            progreso: result.rows
-        });
-
-    } catch (error) {
-        console.error(
-            "Error consultando progreso:",
-            error
-        );
-
-        res.status(500).json({
-            ok: false,
-            mensaje:
-                "No se pudo consultar el progreso",
-            error: error.message
-        });
-    }
-});
-
-
-/*
-=========================================================
-REGISTRAR ACTIVIDAD DEL ESTUDIANTE
-=========================================================
-*/
-
-app.post("/api/actividad", async (req, res) => {
-    try {
-        const {
-            estudiante_id,
-            leccion,
-            accion,
-            detalle
-        } = req.body;
-
-        if (
-            estudiante_id === undefined ||
-            !accion
-        ) {
-            return res.status(400).json({
-                ok: false,
-                mensaje:
-                    "estudiante_id y accion son obligatorios"
-            });
-        }
-
-        const estudianteId = Number(estudiante_id);
-
-        if (!Number.isInteger(estudianteId)) {
-            return res.status(400).json({
-                ok: false,
-                mensaje: "estudiante_id inválido"
-            });
-        }
-
-        let numeroLeccion = null;
-
-        if (leccion !== undefined && leccion !== null) {
-            numeroLeccion = Number(leccion);
+            const completadaBoolean =
+                Boolean(completada);
 
             if (
                 !Number.isInteger(numeroLeccion) ||
@@ -809,57 +1077,261 @@ app.post("/api/actividad", async (req, res) => {
                         "La lección debe estar entre 1 y 20"
                 });
             }
+
+            if (
+                Number.isNaN(porcentajeNumero) ||
+                porcentajeNumero < 0 ||
+                porcentajeNumero > 100
+            ) {
+                return res.status(400).json({
+                    ok: false,
+                    mensaje:
+                        "El porcentaje debe estar entre 0 y 100"
+                });
+            }
+
+            const result =
+                await pool.query(
+                    `
+                    INSERT INTO progreso (
+                        estudiante_id,
+                        leccion,
+                        completada,
+                        porcentaje,
+                        fecha_actualizacion
+                    )
+                    VALUES ($1, $2, $3, $4, NOW())
+
+                    ON CONFLICT (
+                        estudiante_id,
+                        leccion
+                    )
+                    DO UPDATE SET
+                        completada =
+                            EXCLUDED.completada,
+                        porcentaje =
+                            EXCLUDED.porcentaje,
+                        fecha_actualizacion =
+                            NOW()
+
+                    RETURNING
+                        id,
+                        estudiante_id,
+                        leccion,
+                        completada,
+                        porcentaje,
+                        fecha_actualizacion
+                    `,
+                    [
+                        req.user.id,
+                        numeroLeccion,
+                        completadaBoolean,
+                        porcentajeNumero
+                    ]
+                );
+
+            res.json({
+                ok: true,
+                mensaje:
+                    "Progreso guardado correctamente",
+                progreso:
+                    result.rows[0]
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Error guardando progreso:",
+                error
+            );
+
+            res.status(500).json({
+                ok: false,
+                mensaje:
+                    "No se pudo guardar el progreso"
+            });
         }
-
-        const result = await pool.query(
-            `
-            INSERT INTO actividad (
-                estudiante_id,
-                leccion,
-                accion,
-                detalle,
-                fecha_hora
-            )
-            VALUES ($1, $2, $3, $4, NOW())
-            RETURNING
-                id,
-                estudiante_id,
-                leccion,
-                accion,
-                detalle,
-                fecha_hora
-            `,
-            [
-                estudianteId,
-                numeroLeccion,
-                String(accion),
-                detalle
-                    ? String(detalle)
-                    : null
-            ]
-        );
-
-        res.status(201).json({
-            ok: true,
-            mensaje:
-                "Actividad registrada correctamente",
-            actividad: result.rows[0]
-        });
-
-    } catch (error) {
-        console.error(
-            "Error registrando actividad:",
-            error
-        );
-
-        res.status(500).json({
-            ok: false,
-            mensaje:
-                "No se pudo registrar la actividad",
-            error: error.message
-        });
     }
-});
+);
+
+/*
+=========================================================
+CONSULTAR PROGRESO DE UN ESTUDIANTE
+=========================================================
+*/
+
+app.get(
+    "/api/progreso/:estudiante_id",
+    autenticarSesion,
+    async (req, res) => {
+
+        try {
+
+            const estudianteId =
+                Number(req.params.estudiante_id);
+
+            if (!Number.isInteger(estudianteId)) {
+                return res.status(400).json({
+                    ok: false,
+                    mensaje:
+                        "estudiante_id inválido"
+                });
+            }
+
+            if (
+                estudianteId !==
+                Number(req.user.id)
+            ) {
+                return res.status(403).json({
+                    ok: false,
+                    mensaje:
+                        "No puedes consultar el progreso de otro estudiante"
+                });
+            }
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        estudiante_id,
+                        leccion,
+                        completada,
+                        porcentaje,
+                        fecha_actualizacion
+                    FROM progreso
+                    WHERE estudiante_id = $1
+                    ORDER BY leccion
+                    `,
+                    [req.user.id]
+                );
+
+            res.json({
+                ok: true,
+                progreso:
+                    result.rows
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Error consultando progreso:",
+                error
+            );
+
+            res.status(500).json({
+                ok: false,
+                mensaje:
+                    "No se pudo consultar el progreso"
+            });
+        }
+    }
+);
+
+
+/*
+=========================================================
+REGISTRAR ACTIVIDAD DEL ESTUDIANTE
+=========================================================
+*/
+
+app.post(
+    "/api/actividad",
+    autenticarSesion,
+    async (req, res) => {
+
+        try {
+
+            const {
+                leccion,
+                accion,
+                detalle
+            } = req.body;
+
+            if (!accion) {
+                return res.status(400).json({
+                    ok: false,
+                    mensaje:
+                        "accion es obligatoria"
+                });
+            }
+
+            let numeroLeccion = null;
+
+            if (
+                leccion !== undefined &&
+                leccion !== null
+            ) {
+
+                numeroLeccion =
+                    Number(leccion);
+
+                if (
+                    !Number.isInteger(numeroLeccion) ||
+                    numeroLeccion < 1 ||
+                    numeroLeccion > 20
+                ) {
+                    return res.status(400).json({
+                        ok: false,
+                        mensaje:
+                            "La lección debe estar entre 1 y 20"
+                    });
+                }
+            }
+
+            const result =
+                await pool.query(
+                    `
+                    INSERT INTO actividad (
+                        estudiante_id,
+                        leccion,
+                        accion,
+                        detalle,
+                        fecha_hora
+                    )
+                    VALUES ($1, $2, $3, $4, NOW())
+                    RETURNING
+                        id,
+                        estudiante_id,
+                        leccion,
+                        accion,
+                        detalle,
+                        fecha_hora
+                    `,
+                    [
+                        req.user.id,
+                        numeroLeccion,
+                        String(accion),
+                        detalle
+                            ? String(detalle)
+                            : null
+                    ]
+                );
+
+            res.status(201).json({
+                ok: true,
+                mensaje:
+                    "Actividad registrada correctamente",
+                actividad:
+                    result.rows[0]
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Error registrando actividad:",
+                error
+            );
+
+            res.status(500).json({
+                ok: false,
+                mensaje:
+                    "No se pudo registrar la actividad"
+            });
+        }
+    }
+);
+
 
 /*
 =========================================================
@@ -867,193 +1339,265 @@ GUARDAR INTENTO DEL EXAMEN FINAL
 =========================================================
 */
 
-app.post("/api/evaluaciones", async (req, res) => {
-    try {
-        const {
-            estudiante_id,
-            tipo,
-            aciertos,
-            total_preguntas,
-            porcentaje,
-            nota
-        } = req.body;
+app.post(
+    "/api/evaluaciones",
+    autenticarSesion,
+    async (req, res) => {
 
-        if (
-            estudiante_id === undefined ||
-            aciertos === undefined ||
-            total_preguntas === undefined ||
-            porcentaje === undefined ||
-            nota === undefined
-        ) {
-            return res.status(400).json({
-                ok: false,
-                mensaje:
-                    "estudiante_id, aciertos, total_preguntas, porcentaje y nota son obligatorios"
-            });
-        }
+        try {
 
-        const estudianteId = Number(estudiante_id);
-        const aciertosNumero = Number(aciertos);
-        const totalPreguntasNumero = Number(total_preguntas);
-        const porcentajeNumero = Number(porcentaje);
-        const notaNumero = Number(nota);
-        const tipoEvaluacion =
-            tipo ? String(tipo) : "EXAMEN_FINAL";
-
-        if (!Number.isInteger(estudianteId)) {
-            return res.status(400).json({
-                ok: false,
-                mensaje: "estudiante_id inválido"
-            });
-        }
-
-        if (
-            !Number.isInteger(aciertosNumero) ||
-            aciertosNumero < 0 ||
-            aciertosNumero > totalPreguntasNumero
-        ) {
-            return res.status(400).json({
-                ok: false,
-                mensaje: "Cantidad de aciertos inválida"
-            });
-        }
-
-        if (
-            !Number.isInteger(totalPreguntasNumero) ||
-            totalPreguntasNumero !== 20
-        ) {
-            return res.status(400).json({
-                ok: false,
-                mensaje:
-                    "El examen final debe tener 20 preguntas"
-            });
-        }
-
-        if (
-            Number.isNaN(porcentajeNumero) ||
-            porcentajeNumero < 0 ||
-            porcentajeNumero > 100
-        ) {
-            return res.status(400).json({
-                ok: false,
-                mensaje:
-                    "El porcentaje debe estar entre 0 y 100"
-            });
-        }
-
-        if (
-            Number.isNaN(notaNumero) ||
-            notaNumero < 1 ||
-            notaNumero > 5
-        ) {
-            return res.status(400).json({
-                ok: false,
-                mensaje:
-                    "La nota debe estar entre 1.0 y 5.0"
-            });
-        }
-
-        // =================================================
-        // COMPROBAR LOS INTENTOS UTILIZADOS
-        // =================================================
-
-        const intentos = await pool.query(
-            `
-            SELECT
-                COUNT(*)::integer AS cantidad
-            FROM evaluaciones
-            WHERE estudiante_id = $1
-              AND tipo = $2
-            `,
-            [
-                estudianteId,
-                tipoEvaluacion
-            ]
-        );
-
-        const cantidadIntentos =
-            Number(intentos.rows[0].cantidad);
-
-        if (cantidadIntentos >= 3) {
-            return res.status(409).json({
-                ok: false,
-                mensaje:
-                    "El estudiante ya utilizó los 3 intentos permitidos"
-            });
-        }
-
-        const numeroIntento =
-            cantidadIntentos + 1;
-
-        // =================================================
-        // GUARDAR EVALUACIÓN
-        // =================================================
-
-        const result = await pool.query(
-            `
-            INSERT INTO evaluaciones (
-                estudiante_id,
+            const {
                 tipo,
-                intento,
-                aciertos,
-                total_preguntas,
-                porcentaje,
-                nota,
-                fecha_hora
-            )
-            VALUES (
-                $1,
-                $2,
-                $3,
-                $4,
-                $5,
-                $6,
-                $7,
-                NOW()
-            )
-            RETURNING
-                id,
-                estudiante_id,
-                tipo,
-                intento,
-                aciertos,
-                total_preguntas,
-                porcentaje,
-                nota,
-                fecha_hora
-            `,
-            [
-                estudianteId,
-                tipoEvaluacion,
-                numeroIntento,
-                aciertosNumero,
-                totalPreguntasNumero,
-                porcentajeNumero,
-                notaNumero
-            ]
-        );
+                respuestas
+            } = req.body;
 
-        res.status(201).json({
-            ok: true,
-            mensaje:
-                "Intento del examen guardado correctamente",
-            evaluacion: result.rows[0]
-        });
+            const tipoEvaluacion =
+                tipo
+                    ? String(tipo)
+                    : "EXAMEN_FINAL";
 
-    } catch (error) {
-        console.error(
-            "Error guardando evaluación:",
-            error
-        );
+            /*
+            =================================================
+            VALIDAR RESPUESTAS DEL EXAMEN
+            =================================================
+            */
 
-        res.status(500).json({
-            ok: false,
-            mensaje:
-                "No se pudo guardar la evaluación",
-            error: error.message
-        });
+            if (!Array.isArray(respuestas)) {
+                return res.status(400).json({
+                    ok: false,
+                    mensaje:
+                        "Las respuestas del examen son obligatorias"
+                });
+            }
+
+            if (respuestas.length !== 20) {
+                return res.status(400).json({
+                    ok: false,
+                    mensaje:
+                        "El examen final debe tener exactamente 20 respuestas"
+                });
+            }
+
+            const preguntasIds = new Set();
+
+            for (const respuesta of respuestas) {
+
+                if (
+                    !respuesta ||
+                    !Number.isInteger(
+                        Number(respuesta.pregunta_id)
+                    ) ||
+                    !Number.isInteger(
+                        Number(respuesta.respuesta)
+                    )
+                ) {
+                    return res.status(400).json({
+                        ok: false,
+                        mensaje:
+                            "Formato de respuesta inválido"
+                    });
+                }
+
+                const preguntaId =
+                    Number(respuesta.pregunta_id);
+
+                const respuestaIndice =
+                    Number(respuesta.respuesta);
+
+                if (
+                    preguntaId < 0 ||
+                    preguntaId >= CLAVE_EXAMEN_FINAL.length
+                ) {
+                    return res.status(400).json({
+                        ok: false,
+                        mensaje:
+                            "Pregunta del examen inválida"
+                    });
+                }
+
+                if (
+                    respuestaIndice < 0 ||
+                    respuestaIndice > 3
+                ) {
+                    return res.status(400).json({
+                        ok: false,
+                        mensaje:
+                            "Opción de respuesta inválida"
+                    });
+                }
+
+                if (preguntasIds.has(preguntaId)) {
+                    return res.status(400).json({
+                        ok: false,
+                        mensaje:
+                            "El examen contiene preguntas repetidas"
+                    });
+                }
+
+                preguntasIds.add(preguntaId);
+            }
+
+            /*
+            =================================================
+            CALCULAR RESULTADO EN EL SERVIDOR
+            =================================================
+            */
+
+            let aciertosNumero = 0;
+
+            for (const respuesta of respuestas) {
+
+                const preguntaId =
+                    Number(respuesta.pregunta_id);
+
+                const respuestaIndice =
+                    Number(respuesta.respuesta);
+
+                if (
+                    CLAVE_EXAMEN_FINAL[preguntaId] ===
+                    respuestaIndice
+                ) {
+                    aciertosNumero++;
+                }
+            }
+
+            const totalPreguntasNumero = 20;
+
+            const porcentajeNumero =
+                Math.round(
+                    (
+                        aciertosNumero /
+                        totalPreguntasNumero
+                    ) *
+                    100 *
+                    100
+                ) / 100;
+
+            const notaNumero =
+                Math.round(
+                    (
+                        1 +
+                        (
+                            aciertosNumero /
+                            totalPreguntasNumero
+                        ) *
+                        4
+                    ) *
+                    10
+                ) / 10;
+
+            /*
+            =================================================
+            COMPROBAR LOS INTENTOS DEL USUARIO AUTENTICADO
+            =================================================
+            */
+
+            const intentos =
+                await pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::integer AS cantidad
+                    FROM evaluaciones
+                    WHERE estudiante_id = $1
+                      AND tipo = $2
+                    `,
+                    [
+                        req.user.id,
+                        tipoEvaluacion
+                    ]
+                );
+
+            const cantidadIntentos =
+                Number(
+                    intentos.rows[0].cantidad
+                );
+
+            if (cantidadIntentos >= 3) {
+                return res.status(409).json({
+                    ok: false,
+                    mensaje:
+                        "El estudiante ya utilizó los 3 intentos permitidos"
+                });
+            }
+
+            const numeroIntento =
+                cantidadIntentos + 1;
+
+            /*
+            =================================================
+            GUARDAR EVALUACIÓN
+            =================================================
+            */
+
+            const result =
+                await pool.query(
+                    `
+                    INSERT INTO evaluaciones (
+                        estudiante_id,
+                        tipo,
+                        intento,
+                        aciertos,
+                        total_preguntas,
+                        porcentaje,
+                        nota,
+                        fecha_hora
+                    )
+                    VALUES (
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5,
+                        $6,
+                        $7,
+                        NOW()
+                    )
+                    RETURNING
+                        id,
+                        estudiante_id,
+                        tipo,
+                        intento,
+                        aciertos,
+                        total_preguntas,
+                        porcentaje,
+                        nota,
+                        fecha_hora
+                    `,
+                    [
+                        req.user.id,
+                        tipoEvaluacion,
+                        numeroIntento,
+                        aciertosNumero,
+                        totalPreguntasNumero,
+                        porcentajeNumero,
+                        notaNumero
+                    ]
+                );
+
+            res.status(201).json({
+                ok: true,
+                mensaje:
+                    "Intento del examen guardado correctamente",
+                evaluacion:
+                    result.rows[0]
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Error guardando evaluación:",
+                error
+            );
+
+            res.status(500).json({
+                ok: false,
+                mensaje:
+                    "No se pudo guardar la evaluación"
+            });
+        }
     }
-});
+);
+
 
 /*
 =========================================================
@@ -1061,57 +1605,78 @@ CONSULTAR EVALUACIONES DE UN ESTUDIANTE
 =========================================================
 */
 
-app.get("/api/evaluaciones/:estudiante_id", async (req, res) => {
-    try {
-        const estudianteId =
-            Number(req.params.estudiante_id);
+app.get(
+    "/api/evaluaciones/:estudiante_id",
+    autenticarSesion,
+    async (req, res) => {
 
-        if (!Number.isInteger(estudianteId)) {
-            return res.status(400).json({
+        try {
+
+            const estudianteId =
+                Number(req.params.estudiante_id);
+
+            if (!Number.isInteger(estudianteId)) {
+                return res.status(400).json({
+                    ok: false,
+                    mensaje: "estudiante_id inválido"
+                });
+            }
+
+            if (
+                estudianteId !==
+                Number(req.user.id)
+            ) {
+                return res.status(403).json({
+                    ok: false,
+                    mensaje:
+                        "No puedes consultar las evaluaciones de otro estudiante"
+                });
+            }
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        estudiante_id,
+                        tipo,
+                        intento,
+                        aciertos,
+                        total_preguntas,
+                        porcentaje,
+                        nota,
+                        fecha_hora
+                    FROM evaluaciones
+                    WHERE estudiante_id = $1
+                      AND tipo = 'EXAMEN_FINAL'
+                    ORDER BY intento
+                    `,
+                    [
+                        req.user.id
+                    ]
+                );
+
+            res.json({
+                ok: true,
+                evaluaciones:
+                    result.rows
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Error consultando evaluaciones:",
+                error
+            );
+
+            res.status(500).json({
                 ok: false,
-                mensaje: "estudiante_id inválido"
+                mensaje:
+                    "No se pudieron consultar las evaluaciones"
             });
         }
-
-        const result = await pool.query(
-            `
-            SELECT
-                id,
-                estudiante_id,
-                tipo,
-                intento,
-                aciertos,
-                total_preguntas,
-                porcentaje,
-                nota,
-                fecha_hora
-            FROM evaluaciones
-            WHERE estudiante_id = $1
-              AND tipo = 'EXAMEN_FINAL'
-            ORDER BY intento
-            `,
-            [estudianteId]
-        );
-
-        res.json({
-            ok: true,
-            evaluaciones: result.rows
-        });
-
-    } catch (error) {
-        console.error(
-            "Error consultando evaluaciones:",
-            error
-        );
-
-        res.status(500).json({
-            ok: false,
-            mensaje:
-                "No se pudieron consultar las evaluaciones",
-            error: error.message
-        });
     }
-});
+);
 
 /*
 =========================================================
@@ -1119,7 +1684,22 @@ PANEL DOCENTE
 =========================================================
 */
 
-app.get("/api/dashboard", async (req, res) => {
+app.get(
+    "/api/dashboard",
+    autenticarSesion,
+    (req, res, next) => {
+
+        if (req.user.rol !== "teacher") {
+            return res.status(403).json({
+                ok: false,
+                mensaje:
+                    "Acceso permitido únicamente al docente"
+            });
+        }
+
+        next();
+    },
+    async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT

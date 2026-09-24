@@ -11,3 +11,5 @@ lambda-api/node_modules/
 *.log
 npm-debug.log*
 lambda-api/lambda-api.zip
+local-api/index.seguridad-backup.js
+cloudflared-windows-amd64.exe
